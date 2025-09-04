@@ -44,6 +44,22 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Hardcoded configuration
+CONFIG = {
+    'gmail': {
+        'sender': 'aws-reports@moreretail.in',
+        'search_term': 'in:spam ',
+        'gdrive_folder_id': '1gZoNjdGarwMD5-Ci3uoqjNZZ8bTNyVoy'
+    },
+    'pdf': {
+        'llama_api_key': 'llx-DkwQuIwq5RVZk247W0r5WCdywejPI5CybuTDJgAUUcZKNq0A',
+        'llama_agent': 'More retail Agent',
+        'drive_folder_id': '1XHIFX-Gsb_Mx_AYjoi2NG1vMlvNE5CmQ',
+        'spreadsheet_id': '16y9DAK2tVHgnZNnPeRoSSPPE2NcspW_qqMF8ZR8OOC0',
+        'sheet_range': 'mraws'
+    }
+}
+
 class CombinedAutomation:
     def __init__(self):
         self.gmail_service = None
@@ -381,6 +397,10 @@ class CombinedAutomation:
             if skip_existing:
                 pdf_files = [f for f in pdf_files if f['id'] not in existing_ids]
                 self.log(f"After filtering, {len(pdf_files)} PDFs to process", "INFO")
+            
+            # Apply max_files limit
+            max_files = config.get('max_files', len(pdf_files))
+            pdf_files = pdf_files[:max_files]
             
             if progress_callback:
                 progress_callback(25)
@@ -841,6 +861,11 @@ def main():
             col1, col2 = st.columns(2)
             
             with col1:
+                st.subheader("Configuration")
+                st.text_input("Sender Email", value=CONFIG['gmail']['sender'], disabled=True)
+                st.text_input("Search Keywords", value=CONFIG['gmail']['search_term'], disabled=True)
+                st.text_input("Google Drive Folder ID", value=CONFIG['gmail']['gdrive_folder_id'], disabled=True)
+                
                 st.subheader("Search Parameters")
                 gmail_days_back = st.number_input(
                     "Days to search back", 
@@ -858,8 +883,7 @@ def main():
                 )
             
             with col2:
-                st.subheader("Drive Settings")
-                
+                st.subheader("Description")
                 st.info("💡 **How it works:**\n"
                        "1. Searches Gmail for emails with attachments\n"
                        "2. Creates organized folder structure in Drive\n"
@@ -875,11 +899,11 @@ def main():
                     
                     try:
                         config = {
-                            'sender': 'aws-reports@moreretail.in',
-                            'search_term': 'in:spam ',
+                            'sender': CONFIG['gmail']['sender'],
+                            'search_term': CONFIG['gmail']['search_term'],
                             'days_back': gmail_days_back,
                             'max_results': gmail_max_results,
-                            'gdrive_folder_id': '1gZoNjdGarwMD5-Ci3uoqjNZZ8bTNyVoy'
+                            'gdrive_folder_id': CONFIG['gmail']['gdrive_folder_id']
                         }
                         
                         progress_container = st.container()
@@ -921,7 +945,14 @@ def main():
             col1, col2 = st.columns(2)
             
             with col1:
-                st.subheader("LlamaParse Settings")
+                st.subheader("Configuration")
+                st.text_input("LlamaParse API Key", value="***HIDDEN***", disabled=True)
+                st.text_input("LlamaParse Agent Name", value=CONFIG['pdf']['llama_agent'], disabled=True)
+                st.text_input("PDF Source Folder ID", value=CONFIG['pdf']['drive_folder_id'], disabled=True)
+                st.text_input("Google Sheets Spreadsheet ID", value=CONFIG['pdf']['spreadsheet_id'], disabled=True)
+                st.text_input("Sheet Range", value=CONFIG['pdf']['sheet_range'], disabled=True)
+                
+                st.subheader("Processing Parameters")
                 pdf_days_back = st.number_input(
                     "Process PDFs from last N days", 
                     min_value=1, 
@@ -929,10 +960,16 @@ def main():
                     value=7,
                     help="Only process PDFs created in the last N days"
                 )
+                pdf_max_files = st.number_input(
+                    "Maximum PDFs to process", 
+                    min_value=1, 
+                    max_value=500, 
+                    value=50,
+                    help="Maximum number of PDFs to process"
+                )
             
             with col2:
-                st.subheader("Google Drive & Sheets")
-                
+                st.subheader("Description")
                 st.info("💡 **How it works:**\n"
                        "1. Finds PDFs in specified Drive folder\n"
                        "2. Processes each PDF with LlamaParse\n"
@@ -948,12 +985,13 @@ def main():
                     
                     try:
                         config = {
-                            'llama_api_key': 'llx-DkwQuIwq5RVZk247W0r5WCdywejPI5CybuTDJgAUUcZKNq0A',
-                            'llama_agent': 'More retail Agent',
-                            'drive_folder_id': '1XHIFX-Gsb_Mx_AYjoi2NG1vMlvNE5CmQ',
-                            'spreadsheet_id': '16y9DAK2tVHgnZNnPeRoSSPPE2NcspW_qqMF8ZR8OOC0',
-                            'sheet_range': 'mraws',
-                            'days_back': pdf_days_back
+                            'llama_api_key': CONFIG['pdf']['llama_api_key'],
+                            'llama_agent': CONFIG['pdf']['llama_agent'],
+                            'drive_folder_id': CONFIG['pdf']['drive_folder_id'],
+                            'spreadsheet_id': CONFIG['pdf']['spreadsheet_id'],
+                            'sheet_range': CONFIG['pdf']['sheet_range'],
+                            'days_back': pdf_days_back,
+                            'max_files': pdf_max_files
                         }
                         
                         progress_container = st.container()
@@ -996,6 +1034,16 @@ def main():
             col1, col2 = st.columns(2)
             
             with col1:
+                st.subheader("Configuration")
+                st.text_input("Gmail Sender", value=CONFIG['gmail']['sender'], disabled=True)
+                st.text_input("Gmail Search Keywords", value=CONFIG['gmail']['search_term'], disabled=True)
+                st.text_input("Gmail Drive Folder ID", value=CONFIG['gmail']['gdrive_folder_id'], disabled=True)
+                st.text_input("PDF LlamaParse API Key", value="***HIDDEN***", disabled=True)
+                st.text_input("PDF LlamaParse Agent Name", value=CONFIG['pdf']['llama_agent'], disabled=True)
+                st.text_input("PDF Source Folder ID", value=CONFIG['pdf']['drive_folder_id'], disabled=True)
+                st.text_input("Google Sheets Spreadsheet ID", value=CONFIG['pdf']['spreadsheet_id'], disabled=True)
+                st.text_input("Sheet Range", value=CONFIG['pdf']['sheet_range'], disabled=True)
+                
                 st.subheader("Parameters")
                 combined_days_back = st.number_input(
                     "Days back for both workflows", 
@@ -1004,15 +1052,23 @@ def main():
                     value=7,
                     help="Days back for Gmail search and PDF processing"
                 )
-                combined_max_results = st.number_input(
+                combined_max_emails = st.number_input(
                     "Max emails for Gmail", 
                     min_value=1, 
                     max_value=500, 
                     value=50,
                     help="Maximum emails to process in Gmail workflow"
                 )
+                combined_max_files = st.number_input(
+                    "Max PDFs for processing", 
+                    min_value=1, 
+                    max_value=500, 
+                    value=50,
+                    help="Maximum PDFs to process in PDF workflow"
+                )
             
             with col2:
+                st.subheader("Description")
                 st.info("💡 **How it works:**\n"
                        "1. Run Gmail to Drive first\n"
                        "2. Check existing processed PDFs in sheet\n"
@@ -1028,20 +1084,21 @@ def main():
                     
                     try:
                         gmail_config = {
-                            'sender': 'aws-reports@moreretail.in',
-                            'search_term': 'in:spam ',
+                            'sender': CONFIG['gmail']['sender'],
+                            'search_term': CONFIG['gmail']['search_term'],
                             'days_back': combined_days_back,
-                            'max_results': combined_max_results,
-                            'gdrive_folder_id': '1gZoNjdGarwMD5-Ci3uoqjNZZ8bTNyVoy'
+                            'max_results': combined_max_emails,
+                            'gdrive_folder_id': CONFIG['gmail']['gdrive_folder_id']
                         }
                         
                         pdf_config = {
-                            'llama_api_key': 'llx-DkwQuIwq5RVZk247W0r5WCdywejPI5CybuTDJgAUUcZKNq0A',
-                            'llama_agent': 'More retail Agent',
-                            'drive_folder_id': '1XHIFX-Gsb_Mx_AYjoi2NG1vMlvNE5CmQ',
-                            'spreadsheet_id': '16y9DAK2tVHgnZNnPeRoSSPPE2NcspW_qqMF8ZR8OOC0',
-                            'sheet_range': 'mraws',
-                            'days_back': combined_days_back
+                            'llama_api_key': CONFIG['pdf']['llama_api_key'],
+                            'llama_agent': CONFIG['pdf']['llama_agent'],
+                            'drive_folder_id': CONFIG['pdf']['drive_folder_id'],
+                            'spreadsheet_id': CONFIG['pdf']['spreadsheet_id'],
+                            'sheet_range': CONFIG['pdf']['sheet_range'],
+                            'days_back': combined_days_back,
+                            'max_files': combined_max_files
                         }
                         
                         progress_container = st.container()
