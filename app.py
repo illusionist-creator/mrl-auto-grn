@@ -55,20 +55,36 @@ class CombinedAutomation:
         self.drive_scopes = ['https://www.googleapis.com/auth/drive']
         self.sheets_scopes = ['https://www.googleapis.com/auth/spreadsheets']
         
-        self.logs: List[Dict] = []
+        # Initialize logs in session state if not exists
+        if 'logs' not in st.session_state:
+            st.session_state.logs = []
     
     def log(self, message: str, level: str = "INFO"):
-        """Add log entry with timestamp"""
+        """Add log entry with timestamp to session state"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.logs.append({
+        log_entry = {
             "timestamp": timestamp, 
             "level": level.upper(), 
             "message": message
-        })
+        }
+        
+        # Add to session state logs
+        if 'logs' not in st.session_state:
+            st.session_state.logs = []
+        
+        st.session_state.logs.append(log_entry)
         
         # Keep only last 100 logs to prevent memory issues
-        if len(self.logs) > 100:
-            self.logs = self.logs[-100:]
+        if len(st.session_state.logs) > 100:
+            st.session_state.logs = st.session_state.logs[-100:]
+    
+    def get_logs(self):
+        """Get logs from session state"""
+        return st.session_state.get('logs', [])
+    
+    def clear_logs(self):
+        """Clear all logs"""
+        st.session_state.logs = []
     
     def authenticate_from_secrets(self, progress_bar, status_text):
         """Authenticate using Streamlit secrets with web-based OAuth flow"""
@@ -716,313 +732,4 @@ class CombinedAutomation:
             return True
             
         except Exception as e:
-            self.log(f"Failed to append to Google Sheet: {str(e)}", "ERROR")
-            return False
-
-
-def create_streamlit_ui():
-    """Create the Streamlit user interface"""
-    st.title("🤖 Combined Automation Workflows")
-    st.markdown("### Gmail to Drive & PDF to Excel Processing")
-    
-    # Initialize automation object
-    if 'automation' not in st.session_state:
-        st.session_state.automation = CombinedAutomation()
-    
-    # Sidebar for authentication
-    st.sidebar.title("🔐 Authentication")
-    
-    if st.sidebar.button("Authenticate Google APIs", key="auth_button"):
-        with st.spinner("Authenticating..."):
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            success = st.session_state.automation.authenticate_from_secrets(progress_bar, status_text)
-            
-            if success:
-                st.sidebar.success("Authentication successful!")
-                st.session_state.authenticated = True
-            else:
-                st.sidebar.error("Authentication failed")
-                st.session_state.authenticated = False
-    
-    # Check if authenticated
-    if not st.session_state.get('authenticated', False):
-        st.warning("Please authenticate with Google APIs first using the sidebar")
-        st.stop()
-    
-    st.sidebar.success("Authenticated")
-    
-    # Configuration section
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### Configuration")
-    
-    col1, col2 = st.sidebar.columns(2)
-    
-    with col1:
-        days_back = st.number_input(
-            "Days Back",
-            min_value=1,
-            max_value=365,
-            value=7,
-            help="How many days back to search"
-        )
-    
-    with col2:
-        max_results = st.number_input(
-            "Max Results",
-            min_value=1,
-            max_value=1000,
-            value=50,
-            help="Maximum number of items to process"
-        )
-    
-    # Hardcoded configurations
-    gmail_config = {
-        'sender': 'aws-reports@moreretail.in',
-        'search_term': 'in:spam',
-        'days_back': days_back,
-        'max_results': max_results,
-        'gdrive_folder_id': '1gZoNjdGarwMD5-Ci3uoqjNZZ8bTNyVoy'
-    }
-    
-    pdf_config = {
-        'drive_folder_id': '1XHIFX-Gsb_Mx_AYjoi2NG1vMlvNE5CmQ',
-        'llama_api_key': 'llx-DkwQuIwq5RVZk247W0r5WCdywejPI5CybuTDJgAUUcZKNq0A',
-        'llama_agent': 'More retail Agent',
-        'spreadsheet_id': '16y9DAK2tVHgnZNnPeRoSSPPE2NcspW_qqMF8ZR8OOC0',
-        'sheet_range': 'mraws',
-        'days_back': days_back
-    }
-    
-    # Create tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["Gmail to Drive", "PDF to Excel", "Combined Workflow", "Logs"])
-    
-    with tab1:
-        st.header("Gmail Attachment Downloader")
-        st.markdown("**Configuration:**")
-        st.markdown(f"- **Sender:** {gmail_config['sender']}")
-        st.markdown(f"- **Search Term:** {gmail_config['search_term']}")
-        st.markdown(f"- **Days Back:** {days_back}")
-        st.markdown(f"- **Max Results:** {max_results}")
-        
-        if st.button("Start Gmail Workflow", type="primary", key="gmail_start"):
-            with st.spinner("Processing Gmail workflow..."):
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                result = st.session_state.automation.process_gmail_workflow(
-                    gmail_config, 
-                    progress_callback=progress_bar.progress,
-                    status_callback=status_text.text
-                )
-                
-                if result['success']:
-                    st.balloons()
-                    st.success(f"Gmail workflow completed! Processed {result['processed']} attachments")
-                else:
-                    st.error("Gmail workflow failed")
-    
-    with tab2:
-        st.header("PDF to Excel Processor")
-        st.markdown("**Configuration:**")
-        st.markdown(f"- **Drive Folder ID:** {pdf_config['drive_folder_id']}")
-        st.markdown(f"- **LlamaParse Agent:** {pdf_config['llama_agent']}")
-        st.markdown(f"- **Spreadsheet ID:** {pdf_config['spreadsheet_id']}")
-        st.markdown(f"- **Days Back:** {days_back}")
-        
-        if not LLAMA_AVAILABLE:
-            st.error("LlamaParse not available. Please install: pip install llama-cloud-services")
-        else:
-            if st.button("Start PDF Workflow", type="primary", key="pdf_start"):
-                with st.spinner("Processing PDF workflow..."):
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    result = st.session_state.automation.process_pdf_workflow(
-                        pdf_config,
-                        progress_callback=progress_bar.progress,
-                        status_callback=status_text.text
-                    )
-                    
-                    if result['success']:
-                        st.balloons()
-                        rows_added = result.get('rows_added', 0)
-                        st.success(f"PDF workflow completed! Processed {result['processed']} files, added {rows_added} rows")
-                    else:
-                        st.error("PDF workflow failed")
-    
-    with tab3:
-        st.header("Combined Workflow")
-        st.markdown("**Process Order:**")
-        st.markdown("1. Gmail to Drive workflow (download attachments)")
-        st.markdown("2. PDF to Excel workflow (process PDFs with LlamaParse)")
-        
-        st.markdown("**Configuration:**")
-        st.markdown(f"- **Gmail Sender:** {gmail_config['sender']}")
-        st.markdown(f"- **Gmail Search:** {gmail_config['search_term']}")
-        st.markdown(f"- **PDF Agent:** {pdf_config['llama_agent']}")
-        st.markdown(f"- **Days Back:** {days_back}")
-        st.markdown(f"- **Max Results:** {max_results}")
-        
-        if not LLAMA_AVAILABLE:
-            st.error("LlamaParse not available for PDF processing. Please install: pip install llama-cloud-services")
-        else:
-            if st.button("Start Combined Workflow", type="primary", key="combined_start"):
-                with st.spinner("Processing combined workflow..."):
-                    overall_progress = st.progress(0)
-                    status_text = st.empty()
-                    
-                    # Step 1: Gmail workflow
-                    st.markdown("### Step 1: Gmail to Drive")
-                    gmail_progress = st.progress(0)
-                    gmail_status = st.empty()
-                    
-                    gmail_result = st.session_state.automation.process_gmail_workflow(
-                        gmail_config,
-                        progress_callback=gmail_progress.progress,
-                        status_callback=gmail_status.text
-                    )
-                    
-                    overall_progress.progress(50)
-                    
-                    if gmail_result['success']:
-                        st.success(f"Gmail workflow completed! Processed {gmail_result['processed']} attachments")
-                        
-                        # Step 2: PDF workflow
-                        st.markdown("### Step 2: PDF to Excel")
-                        pdf_progress = st.progress(0)
-                        pdf_status = st.empty()
-                        
-                        pdf_result = st.session_state.automation.process_pdf_workflow(
-                            pdf_config,
-                            progress_callback=pdf_progress.progress,
-                            status_callback=pdf_status.text
-                        )
-                        
-                        overall_progress.progress(100)
-                        
-                        if pdf_result['success']:
-                            st.balloons()
-                            rows_added = pdf_result.get('rows_added', 0)
-                            st.success(f"Combined workflow completed successfully!")
-                            st.info(f"Gmail: {gmail_result['processed']} attachments processed")
-                            st.info(f"PDF: {pdf_result['processed']} files processed, {rows_added} rows added")
-                        else:
-                            st.error("PDF workflow failed")
-                    else:
-                        st.error("Gmail workflow failed - stopping combined workflow")
-    
-    with tab4:
-        st.header("Activity Logs")
-        
-        # Auto-refresh logs every 3 seconds
-        placeholder = st.empty()
-        
-        if st.button("Refresh Logs", key="refresh_logs"):
-            st.rerun()
-        
-        # Clear logs button
-        if st.button("Clear Logs", key="clear_logs"):
-            st.session_state.automation.logs = []
-            st.rerun()
-        
-        # Display logs
-        logs = st.session_state.automation.logs
-        if logs:
-            log_container = st.container()
-            with log_container:
-                # Show recent logs first
-                for log in reversed(logs[-50:]):  # Show last 50 logs
-                    level = log['level']
-                    timestamp = log['timestamp']
-                    message = log['message']
-                    
-                    if level == "ERROR":
-                        st.error(f"[{timestamp}] {message}")
-                    elif level == "WARNING":
-                        st.warning(f"[{timestamp}] {message}")
-                    elif level == "SUCCESS":
-                        st.success(f"[{timestamp}] {message}")
-                    else:
-                        st.info(f"[{timestamp}] {message}")
-        else:
-            st.info("No logs available. Start a workflow to see activity logs.")
-        
-        # Auto-refresh every 3 seconds when workflows are running
-        if st.session_state.get('workflow_running', False):
-            time.sleep(3)
-            st.rerun()
-
-
-def create_help_section():
-    """Create help section with instructions"""
-    with st.sidebar.expander("Help & Instructions", expanded=False):
-        st.markdown("""
-        ### Setup Steps:
-        1. **Authenticate** with Google APIs using the button above
-        2. **Configure** Days Back and Max Results as needed
-        3. **Choose a workflow** from the tabs:
-           - **Gmail to Drive**: Downloads attachments from Gmail to Google Drive
-           - **PDF to Excel**: Processes PDFs using LlamaParse and saves to Google Sheets
-           - **Combined**: Runs both workflows in sequence
-        4. **Monitor progress** in the Logs tab
-        
-        ### Configurations (Hardcoded):
-        **Gmail Workflow:**
-        - Sender: aws-reports@moreretail.in
-        - Search: in:spam
-        - Drive Folder: Configured automatically
-        
-        **PDF Workflow:**
-        - LlamaParse Agent: More retail Agent
-        - Drive Folder: Configured for PDF processing
-        - Output: Google Sheets (mraws)
-        
-        ### Notes:
-        - All configurations are pre-set except Days Back and Max Results
-        - Combined workflow runs Gmail first, then PDF processing
-        - Logs update in real-time during workflow execution
-        - Files are organized automatically in Google Drive folders
-        """)
-    
-    with st.sidebar.expander("About", expanded=False):
-        st.markdown("""
-        **Combined Automation Workflows v1.0**
-        
-        This application combines:
-        - Gmail attachment downloading
-        - PDF processing with LlamaParse
-        - Google Drive organization
-        - Google Sheets data consolidation
-        
-        Built with Streamlit and Google APIs.
-        """)
-
-
-def main():
-    """Main function to run the Streamlit app"""
-    try:
-        # Initialize session state
-        if 'authenticated' not in st.session_state:
-            st.session_state.authenticated = False
-        
-        if 'workflow_running' not in st.session_state:
-            st.session_state.workflow_running = False
-        
-        # Create UI
-        create_streamlit_ui()
-        create_help_section()
-        
-        # Add auto-refresh for logs when workflow is running
-        if st.session_state.get('workflow_running', False):
-            time.sleep(2)
-            st.rerun()
-        
-    except Exception as e:
-        st.error(f"Application error: {str(e)}")
-        st.info("Please refresh the page and try again.")
-
-
-if __name__ == "__main__":
-    main()
+            self.log(
