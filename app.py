@@ -55,20 +55,36 @@ class CombinedAutomation:
         self.drive_scopes = ['https://www.googleapis.com/auth/drive']
         self.sheets_scopes = ['https://www.googleapis.com/auth/spreadsheets']
         
-        self.logs: List[Dict] = []
+        # Initialize logs in session state if not exists
+        if 'logs' not in st.session_state:
+            st.session_state.logs = []
     
     def log(self, message: str, level: str = "INFO"):
-        """Add log entry with timestamp"""
+        """Add log entry with timestamp to session state"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.logs.append({
+        log_entry = {
             "timestamp": timestamp, 
             "level": level.upper(), 
             "message": message
-        })
+        }
+        
+        # Add to session state logs
+        if 'logs' not in st.session_state:
+            st.session_state.logs = []
+        
+        st.session_state.logs.append(log_entry)
         
         # Keep only last 100 logs to prevent memory issues
-        if len(self.logs) > 100:
-            self.logs = self.logs[-100:]
+        if len(st.session_state.logs) > 100:
+            st.session_state.logs = st.session_state.logs[-100:]
+    
+    def get_logs(self):
+        """Get logs from session state"""
+        return st.session_state.get('logs', [])
+    
+    def clear_logs(self):
+        """Clear all logs"""
+        st.session_state.logs = []
     
     def authenticate_from_secrets(self, progress_bar, status_text):
         """Authenticate using Streamlit secrets with web-based OAuth flow"""
@@ -298,7 +314,35 @@ class CombinedAutomation:
             self.log(f"Gmail workflow failed: {str(e)}", "ERROR")
             return {'success': False, 'processed': 0}
     
-    def process_pdf_workflow(self, config: dict, progress_callback=None, status_callback=None):
+    def get_existing_drive_ids(self, spreadsheet_id: str, sheet_range: str) -> set:
+        """Get set of existing drive_file_id from Google Sheet"""
+        try:
+            result = self.sheets_service.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=sheet_range,
+                majorDimension="ROWS"
+            ).execute()
+            
+            values = result.get('values', [])
+            if not values:
+                return set()
+            
+            headers = values[0]
+            if "drive_file_id" not in headers:
+                self.log("No 'drive_file_id' column found in sheet", "WARNING")
+                return set()
+            
+            id_index = headers.index("drive_file_id")
+            existing_ids = {row[id_index] for row in values[1:] if len(row) > id_index and row[id_index]}
+            
+            self.log(f"Found {len(existing_ids)} existing file IDs in sheet", "INFO")
+            return existing_ids
+            
+        except Exception as e:
+            self.log(f"Failed to get existing file IDs: {str(e)}", "ERROR")
+            return set()
+    
+    def process_pdf_workflow(self, config: dict, progress_callback=None, status_callback=None, skip_existing: bool = False):
         """Process PDF to Excel workflow using LlamaParse"""
         try:
             if not LLAMA_AVAILABLE:
@@ -321,11 +365,22 @@ class CombinedAutomation:
             
             self.log("LlamaParse agent found successfully", "SUCCESS")
             
+            # Get existing IDs if skipping
+            existing_ids = set()
+            if skip_existing:
+                existing_ids = self.get_existing_drive_ids(config['spreadsheet_id'], config['sheet_range'])
+                self.log(f"Skipping {len(existing_ids)} already processed files", "INFO")
+            
             # Get PDF files from Drive
             pdf_files = self._list_drive_pdfs(
                 config['drive_folder_id'], 
                 config['days_back']
             )
+            
+            # Filter out existing if needed
+            if skip_existing:
+                pdf_files = [f for f in pdf_files if f['id'] not in existing_ids]
+                self.log(f"After filtering, {len(pdf_files)} PDFs to process", "INFO")
             
             if progress_callback:
                 progress_callback(25)
@@ -473,7 +528,7 @@ class CombinedAutomation:
     def _create_drive_folder(self, folder_name: str, parent_folder_id: Optional[str] = None) -> str:
         """Create a folder in Google Drive"""
         try:
-            # Check if folder already exists
+            # First check if folder already exists
             query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
             if parent_folder_id:
                 query += f" and '{parent_folder_id}' in parents"
@@ -482,7 +537,10 @@ class CombinedAutomation:
             files = existing.get('files', [])
             
             if files:
-                return files[0]['id']
+                # Folder already exists, return its ID
+                folder_id = files[0]['id']
+                self.log(f"Using existing folder: {folder_name} (ID: {folder_id})", "INFO")
+                return folder_id
             
             # Create new folder
             folder_metadata = {
@@ -498,7 +556,10 @@ class CombinedAutomation:
                 fields='id'
             ).execute()
             
-            return folder.get('id')
+            folder_id = folder.get('id')
+            self.log(f"Created Google Drive folder: {folder_name} (ID: {folder_id})", "SUCCESS")
+            
+            return folder_id
             
         except Exception as e:
             self.log(f"Failed to create folder {folder_name}: {str(e)}", "ERROR")
@@ -720,338 +781,371 @@ class CombinedAutomation:
             return False
 
 
-def create_streamlit_ui():
-    """Create the Streamlit user interface"""
+def main():
+    """Main Streamlit application"""
     st.title("🤖 Combined Automation Workflows")
     st.markdown("### Gmail to Drive & PDF to Excel Processing")
     
-    # Initialize automation object
+    # Initialize automation instance in session state
     if 'automation' not in st.session_state:
         st.session_state.automation = CombinedAutomation()
     
-    # Sidebar for authentication
-    st.sidebar.title("🔐 Authentication")
+    # Initialize workflow running state
+    if 'workflow_running' not in st.session_state:
+        st.session_state.workflow_running = False
     
-    if st.sidebar.button("Authenticate Google APIs", key="auth_button"):
-        with st.spinner("Authenticating..."):
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+    automation = st.session_state.automation
+    
+    # Sidebar configuration
+    st.sidebar.header("Configuration")
+    
+    # Authentication section
+    st.sidebar.subheader("🔐 Authentication")
+    auth_status = st.sidebar.empty()
+    
+    if not automation.gmail_service or not automation.drive_service:
+        if st.sidebar.button("🚀 Authenticate with Google", type="primary"):
+            progress_bar = st.sidebar.progress(0)
+            status_text = st.sidebar.empty()
             
-            success = st.session_state.automation.authenticate_from_secrets(progress_bar, status_text)
-            
+            success = automation.authenticate_from_secrets(progress_bar, status_text)
             if success:
-                st.sidebar.success("Authentication successful!")
-                st.session_state.authenticated = True
+                auth_status.success("✅ Authenticated successfully!")
+                st.sidebar.success("Ready to process workflows!")
             else:
-                st.sidebar.error("Authentication failed")
-                st.session_state.authenticated = False
+                auth_status.error("❌ Authentication failed")
+            
+            progress_bar.empty()
+            status_text.empty()
+    else:
+        auth_status.success("✅ Already authenticated")
+        
+        # Clear authentication button
+        if st.sidebar.button("🔄 Re-authenticate"):
+            if 'oauth_token' in st.session_state:
+                del st.session_state.oauth_token
+            st.session_state.automation = CombinedAutomation()
+            st.rerun()
     
-    # Check if authenticated
-    if not st.session_state.get('authenticated', False):
-        st.warning("Please authenticate with Google APIs first using the sidebar")
-        st.stop()
+    # Main tabs
+    tab1, tab2, tab3, tab4 = st.tabs(["📧 Gmail to Drive", "📄 PDF to Excel", "🔗 Combined Workflow", "📋 Logs & Status"])
     
-    st.sidebar.success("Authenticated")
-    
-    # Configuration section
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### Configuration")
-    
-    col1, col2 = st.sidebar.columns(2)
-    
-    with col1:
-        days_back = st.number_input(
-            "Days Back",
-            min_value=1,
-            max_value=365,
-            value=7,
-            help="How many days back to search"
-        )
-    
-    with col2:
-        max_results = st.number_input(
-            "Max Results",
-            min_value=1,
-            max_value=1000,
-            value=50,
-            help="Maximum number of items to process"
-        )
-    
-    # Hardcoded configurations
-    gmail_config = {
-        'sender': 'aws-reports@moreretail.in',
-        'search_term': 'in:spam',
-        'days_back': days_back,
-        'max_results': max_results,
-        'gdrive_folder_id': '1gZoNjdGarwMD5-Ci3uoqjNZZ8bTNyVoy'
-    }
-    
-    pdf_config = {
-        'drive_folder_id': '1XHIFX-Gsb_Mx_AYjoi2NG1vMlvNE5CmQ',
-        'llama_api_key': 'llx-DkwQuIwq5RVZk247W0r5WCdywejPI5CybuTDJgAUUcZKNq0A',
-        'llama_agent': 'More retail Agent',
-        'spreadsheet_id': '16y9DAK2tVHgnZNnPeRoSSPPE2NcspW_qqMF8ZR8OOC0',
-        'sheet_range': 'mraws',
-        'days_back': days_back
-    }
-    
-    # Create tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["Gmail to Drive", "PDF to Excel", "Combined Workflow", "Logs"])
-    
+    # Tab 1: Gmail to Drive Workflow
     with tab1:
-        st.header("Gmail Attachment Downloader")
-        st.markdown("**Configuration:**")
-        st.markdown(f"- **Sender:** {gmail_config['sender']}")
-        st.markdown(f"- **Search Term:** {gmail_config['search_term']}")
-        st.markdown(f"- **Days Back:** {days_back}")
-        st.markdown(f"- **Max Results:** {max_results}")
+        st.header("📧 Gmail Attachment Downloader")
+        st.markdown("Download attachments from Gmail and organize them in Google Drive")
         
-        if st.button("Start Gmail Workflow", type="primary", key="gmail_start"):
-            st.session_state.workflow_running = True
-            with st.spinner("Processing Gmail workflow..."):
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                result = st.session_state.automation.process_gmail_workflow(
-                    gmail_config, 
-                    progress_callback=progress_bar.progress,
-                    status_callback=status_text.text
+        if not automation.gmail_service or not automation.drive_service:
+            st.warning("⚠️ Please authenticate first using the sidebar")
+        else:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("Search Parameters")
+                gmail_days_back = st.number_input(
+                    "Days to search back", 
+                    min_value=1, 
+                    max_value=365, 
+                    value=7,
+                    help="How many days back to search"
                 )
+                gmail_max_results = st.number_input(
+                    "Maximum emails to process", 
+                    min_value=1, 
+                    max_value=500, 
+                    value=50,
+                    help="Maximum number of emails to process"
+                )
+            
+            with col2:
+                st.subheader("Drive Settings")
                 
-                st.session_state.workflow_running = False
-                
-                if result['success']:
-                    st.balloons()
-                    st.success(f"Gmail workflow completed! Processed {result['processed']} attachments")
+                st.info("💡 **How it works:**\n"
+                       "1. Searches Gmail for emails with attachments\n"
+                       "2. Creates organized folder structure in Drive\n"
+                       "3. Downloads and saves attachments by type\n"
+                       "4. Avoids duplicates automatically")
+            
+            # Gmail workflow execution
+            if st.button("🚀 Start Gmail Workflow", type="primary", disabled=st.session_state.workflow_running):
+                if st.session_state.workflow_running:
+                    st.warning("Another workflow is currently running. Please wait for it to complete.")
                 else:
-                    st.error("Gmail workflow failed")
+                    st.session_state.workflow_running = True
+                    
+                    try:
+                        config = {
+                            'sender': 'aws-reports@moreretail.in',
+                            'search_term': 'in:spam ',
+                            'days_back': gmail_days_back,
+                            'max_results': gmail_max_results,
+                            'gdrive_folder_id': '1gZoNjdGarwMD5-Ci3uoqjNZZ8bTNyVoy'
+                        }
+                        
+                        progress_container = st.container()
+                        with progress_container:
+                            st.subheader("📊 Processing Status")
+                            progress_bar = st.progress(0)
+                            status_text = st.empty()
+                            
+                            def update_progress(value):
+                                progress_bar.progress(value)
+                            
+                            def update_status(message):
+                                status_text.text(message)
+                            
+                            result = automation.process_gmail_workflow(
+                                config, 
+                                progress_callback=update_progress,
+                                status_callback=update_status
+                            )
+                            
+                            if result['success']:
+                                st.success(f"✅ Gmail workflow completed successfully! Processed {result['processed']} attachments.")
+                            else:
+                                st.error("❌ Gmail workflow failed. Check logs for details.")
+                    
+                    finally:
+                        st.session_state.workflow_running = False
     
+    # Tab 2: PDF to Excel Workflow
     with tab2:
-        st.header("PDF to Excel Processor")
-        st.markdown("**Configuration:**")
-        st.markdown(f"- **Drive Folder ID:** {pdf_config['drive_folder_id']}")
-        st.markdown(f"- **LlamaParse Agent:** {pdf_config['llama_agent']}")
-        st.markdown(f"- **Spreadsheet ID:** {pdf_config['spreadsheet_id']}")
-        st.markdown(f"- **Days Back:** {days_back}")
+        st.header("📄 PDF to Excel Processor")
+        st.markdown("Extract structured data from PDFs using LlamaParse and save to Google Sheets")
         
         if not LLAMA_AVAILABLE:
-            st.error("LlamaParse not available. Please install: pip install llama-cloud-services")
+            st.error("❌ LlamaParse not available. Please install: `pip install llama-cloud-services`")
+        elif not automation.drive_service or not automation.sheets_service:
+            st.warning("⚠️ Please authenticate first using the sidebar")
         else:
-            if st.button("Start PDF Workflow", type="primary", key="pdf_start"):
-                st.session_state.workflow_running = True
-                with st.spinner("Processing PDF workflow..."):
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("LlamaParse Settings")
+                pdf_days_back = st.number_input(
+                    "Process PDFs from last N days", 
+                    min_value=1, 
+                    max_value=365, 
+                    value=7,
+                    help="Only process PDFs created in the last N days"
+                )
+            
+            with col2:
+                st.subheader("Google Drive & Sheets")
+                
+                st.info("💡 **How it works:**\n"
+                       "1. Finds PDFs in specified Drive folder\n"
+                       "2. Processes each PDF with LlamaParse\n"
+                       "3. Extracts structured data\n"
+                       "4. Appends results to Google Sheets")
+            
+            # PDF workflow execution
+            if st.button("🚀 Start PDF Workflow", type="primary", disabled=st.session_state.workflow_running):
+                if st.session_state.workflow_running:
+                    st.warning("Another workflow is currently running. Please wait for it to complete.")
+                else:
+                    st.session_state.workflow_running = True
                     
-                    result = st.session_state.automation.process_pdf_workflow(
-                        pdf_config,
-                        progress_callback=progress_bar.progress,
-                        status_callback=status_text.text
-                    )
+                    try:
+                        config = {
+                            'llama_api_key': 'llx-DkwQuIwq5RVZk247W0r5WCdywejPI5CybuTDJgAUUcZKNq0A',
+                            'llama_agent': 'More retail Agent',
+                            'drive_folder_id': '1XHIFX-Gsb_Mx_AYjoi2NG1vMlvNE5CmQ',
+                            'spreadsheet_id': '16y9DAK2tVHgnZNnPeRoSSPPE2NcspW_qqMF8ZR8OOC0',
+                            'sheet_range': 'mraws',
+                            'days_back': pdf_days_back
+                        }
+                        
+                        progress_container = st.container()
+                        with progress_container:
+                            st.subheader("📊 Processing Status")
+                            progress_bar = st.progress(0)
+                            status_text = st.empty()
+                            
+                            def update_progress(value):
+                                progress_bar.progress(value)
+                            
+                            def update_status(message):
+                                status_text.text(message)
+                            
+                            result = automation.process_pdf_workflow(
+                                config, 
+                                progress_callback=update_progress,
+                                status_callback=update_status
+                            )
+                            
+                            if result['success']:
+                                rows_text = f", added {result['rows_added']} rows" if 'rows_added' in result else ""
+                                st.success(f"✅ PDF workflow completed successfully! Processed {result['processed']} files{rows_text}.")
+                            else:
+                                st.error("❌ PDF workflow failed. Check logs for details.")
                     
-                    st.session_state.workflow_running = False
-                    
-                    if result['success']:
-                        st.balloons()
-                        rows_added = result.get('rows_added', 0)
-                        st.success(f"PDF workflow completed! Processed {result['processed']} files, added {rows_added} rows")
-                    else:
-                        st.error("PDF workflow failed")
+                    finally:
+                        st.session_state.workflow_running = False
     
+    # Tab 3: Combined Workflow
     with tab3:
-        st.header("Combined Workflow")
-        st.markdown("**Process Order:**")
-        st.markdown("1. Gmail to Drive workflow (download attachments)")
-        st.markdown("2. PDF to Excel workflow (process PDFs with LlamaParse)")
+        st.header("🔗 Combined Workflow")
+        st.markdown("Run both Gmail to Drive and PDF to Excel workflows sequentially")
         
-        st.markdown("**Configuration:**")
-        st.markdown(f"- **Gmail Sender:** {gmail_config['sender']}")
-        st.markdown(f"- **Gmail Search:** {gmail_config['search_term']}")
-        st.markdown(f"- **PDF Agent:** {pdf_config['llama_agent']}")
-        st.markdown(f"- **Days Back:** {days_back}")
-        st.markdown(f"- **Max Results:** {max_results}")
-        
-        if not LLAMA_AVAILABLE:
-            st.error("LlamaParse not available for PDF processing. Please install: pip install llama-cloud-services")
+        if not automation.gmail_service or not automation.drive_service or not automation.sheets_service:
+            st.warning("⚠️ Please authenticate first using the sidebar")
+        elif not LLAMA_AVAILABLE:
+            st.error("❌ LlamaParse not available. Please install: `pip install llama-cloud-services`")
         else:
-            if st.button("Start Combined Workflow", type="primary", key="combined_start"):
-                st.session_state.workflow_running = True
-                with st.spinner("Processing combined workflow..."):
-                    overall_progress = st.progress(0)
-                    status_text = st.empty()
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("Parameters")
+                combined_days_back = st.number_input(
+                    "Days back for both workflows", 
+                    min_value=1, 
+                    max_value=365, 
+                    value=7,
+                    help="Days back for Gmail search and PDF processing"
+                )
+                combined_max_results = st.number_input(
+                    "Max emails for Gmail", 
+                    min_value=1, 
+                    max_value=500, 
+                    value=50,
+                    help="Maximum emails to process in Gmail workflow"
+                )
+            
+            with col2:
+                st.info("💡 **How it works:**\n"
+                       "1. Run Gmail to Drive first\n"
+                       "2. Check existing processed PDFs in sheet\n"
+                       "3. Run PDF to Excel only on new files\n"
+                       "4. Show combined summary")
+            
+            # Combined workflow execution
+            if st.button("🚀 Start Combined Workflow", type="primary", disabled=st.session_state.workflow_running):
+                if st.session_state.workflow_running:
+                    st.warning("Another workflow is currently running. Please wait for it to complete.")
+                else:
+                    st.session_state.workflow_running = True
                     
-                    # Step 1: Gmail workflow
-                    st.markdown("### Step 1: Gmail to Drive")
-                    gmail_progress = st.progress(0)
-                    gmail_status = st.empty()
-                    
-                    gmail_result = st.session_state.automation.process_gmail_workflow(
-                        gmail_config,
-                        progress_callback=gmail_progress.progress,
-                        status_callback=gmail_status.text
-                    )
-                    
-                    overall_progress.progress(50)
-                    
-                    if gmail_result['success']:
-                        st.success(f"Gmail workflow completed! Processed {gmail_result['processed']} attachments")
+                    try:
+                        gmail_config = {
+                            'sender': 'aws-reports@moreretail.in',
+                            'search_term': 'in:spam ',
+                            'days_back': combined_days_back,
+                            'max_results': combined_max_results,
+                            'gdrive_folder_id': '1gZoNjdGarwMD5-Ci3uoqjNZZ8bTNyVoy'
+                        }
                         
-                        # Step 2: PDF workflow
-                        st.markdown("### Step 2: PDF to Excel")
-                        pdf_progress = st.progress(0)
-                        pdf_status = st.empty()
+                        pdf_config = {
+                            'llama_api_key': 'llx-DkwQuIwq5RVZk247W0r5WCdywejPI5CybuTDJgAUUcZKNq0A',
+                            'llama_agent': 'More retail Agent',
+                            'drive_folder_id': '1XHIFX-Gsb_Mx_AYjoi2NG1vMlvNE5CmQ',
+                            'spreadsheet_id': '16y9DAK2tVHgnZNnPeRoSSPPE2NcspW_qqMF8ZR8OOC0',
+                            'sheet_range': 'mraws',
+                            'days_back': combined_days_back
+                        }
                         
-                        pdf_result = st.session_state.automation.process_pdf_workflow(
-                            pdf_config,
-                            progress_callback=pdf_progress.progress,
-                            status_callback=pdf_status.text
-                        )
-                        
-                        overall_progress.progress(100)
-                        
-                        if pdf_result['success']:
-                            st.balloons()
-                            rows_added = pdf_result.get('rows_added', 0)
-                            st.success(f"Combined workflow completed successfully!")
-                            st.info(f"Gmail: {gmail_result['processed']} attachments processed")
-                            st.info(f"PDF: {pdf_result['processed']} files processed, {rows_added} rows added")
-                        else:
-                            st.error("PDF workflow failed")
-                    else:
-                        st.error("Gmail workflow failed - stopping combined workflow")
+                        progress_container = st.container()
+                        with progress_container:
+                            st.subheader("📊 Processing Status")
+                            progress_bar = st.progress(0)
+                            status_text = st.empty()
+                            
+                            def update_progress(value):
+                                progress_bar.progress(value)
+                            
+                            def update_status(message):
+                                status_text.text(message)
+                            
+                            # Run Gmail workflow
+                            update_status("Running Gmail to Drive...")
+                            gmail_result = automation.process_gmail_workflow(
+                                gmail_config, 
+                                progress_callback=update_progress,
+                                status_callback=update_status
+                            )
+                            
+                            if not gmail_result['success']:
+                                st.error("❌ Gmail workflow failed. Stopping combined workflow.")
+                                return
+                            
+                            # Run PDF workflow with skip_existing
+                            update_status("Checking existing files and running PDF to Excel...")
+                            pdf_result = automation.process_pdf_workflow(
+                                pdf_config, 
+                                progress_callback=update_progress,
+                                status_callback=update_status,
+                                skip_existing=True
+                            )
+                            
+                            if pdf_result['success']:
+                                summary = f"✅ Combined workflow completed!\n"
+                                summary += f"Gmail: Processed {gmail_result['processed']} attachments\n"
+                                summary += f"PDF: Processed {pdf_result['processed']} new files, added {pdf_result.get('rows_added', 0)} rows"
+                                st.success(summary)
+                            else:
+                                st.error("❌ PDF workflow failed. Check logs for details.")
                     
-                    st.session_state.workflow_running = False
+                    finally:
+                        st.session_state.workflow_running = False
     
+    # Tab 4: Logs and Status
     with tab4:
-        st.header("Activity Logs")
+        st.header("📋 System Logs & Status")
         
-        # Control buttons
-        col1, col2, col3 = st.columns([1, 1, 2])
-        
+        col1, col2, col3 = st.columns(3)
         with col1:
-            if st.button("Refresh Logs", key="refresh_logs"):
+            if st.button("🔄 Refresh Logs"):
                 st.rerun()
-        
         with col2:
-            if st.button("Clear Logs", key="clear_logs"):
-                st.session_state.automation.logs = []
+            if st.button("🗑️ Clear Logs"):
+                automation.clear_logs()
                 st.success("Logs cleared!")
-                time.sleep(1)
                 st.rerun()
-        
         with col3:
-            # Auto-refresh toggle
-            auto_refresh = st.checkbox("Auto-refresh logs (5s)", 
-                                     value=st.session_state.get('auto_refresh_logs', False))
-            st.session_state.auto_refresh_logs = auto_refresh
-        
-        st.markdown("---")
+            if st.checkbox("Auto-refresh (5s)", value=False):
+                time.sleep(5)
+                st.rerun()
         
         # Display logs
-        logs = st.session_state.automation.logs
+        logs = automation.get_logs()
+        
         if logs:
-            # Create a container for logs that will be updated
-            log_container = st.container()
+            st.subheader(f"Recent Activity ({len(logs)} entries)")
             
-            with log_container:
-                # Show recent logs first (reversed order)
-                recent_logs = list(reversed(logs[-50:]))  # Show last 50 logs, most recent first
+            # Show logs in reverse chronological order (newest first)
+            for log_entry in reversed(logs[-50:]):  # Show last 50 logs
+                timestamp = log_entry['timestamp']
+                level = log_entry['level']
+                message = log_entry['message']
                 
-                for log in recent_logs:
-                    level = log['level']
-                    timestamp = log['timestamp']
-                    message = log['message']
-                    
-                    # Create a formatted log entry
-                    log_entry = f"**[{timestamp}]** {message}"
-                    
-                    if level == "ERROR":
-                        st.error(log_entry, icon="❌")
-                    elif level == "WARNING":
-                        st.warning(log_entry, icon="⚠️")
-                    elif level == "SUCCESS":
-                        st.success(log_entry, icon="✅")
-                    else:
-                        st.info(log_entry, icon="ℹ️")
-                
-                # Show log count
-                st.caption(f"Showing {len(recent_logs)} of {len(logs)} total logs")
+                # Color coding based on log level
+                if level == "ERROR":
+                    st.error(f"🔴 **{timestamp}** - {message}")
+                elif level == "WARNING":
+                    st.warning(f"🟡 **{timestamp}** - {message}")
+                elif level == "SUCCESS":
+                    st.success(f"🟢 **{timestamp}** - {message}")
+                else:  # INFO
+                    st.info(f"ℹ️ **{timestamp}** - {message}")
         else:
-            st.info("No logs available. Start a workflow to see activity logs.")
+            st.info("No logs available. Start a workflow to see activity logs here.")
         
-        # Auto-refresh functionality
-        if auto_refresh and not st.session_state.get('workflow_running', False):
-            # Only auto-refresh if no workflow is currently running to avoid conflicts
-            time.sleep(5)
-            st.rerun()
+        # System status
+        st.subheader("🔧 System Status")
+        status_cols = st.columns(2)
+        
+        with status_cols[0]:
+            st.metric("Authentication Status", 
+                     "✅ Connected" if automation.gmail_service else "❌ Not Connected")
+            st.metric("Workflow Status", 
+                     "🟡 Running" if st.session_state.workflow_running else "🟢 Idle")
+        
+        with status_cols[1]:
+            st.metric("LlamaParse Available", 
+                     "✅ Available" if LLAMA_AVAILABLE else "❌ Not Installed")
+            st.metric("Total Logs", len(logs))
 
 
-def create_help_section():
-    """Create help section with instructions"""
-    with st.sidebar.expander("Help & Instructions", expanded=False):
-        st.markdown("""
-        ### Setup Steps:
-        1. **Authenticate** with Google APIs using the button above
-        2. **Configure** Days Back and Max Results as needed
-        3. **Choose a workflow** from the tabs:
-           - **Gmail to Drive**: Downloads attachments from Gmail to Google Drive
-           - **PDF to Excel**: Processes PDFs using LlamaParse and saves to Google Sheets
-           - **Combined**: Runs both workflows in sequence
-        4. **Monitor progress** in the Logs tab
-        
-        ### Configurations (Hardcoded):
-        **Gmail Workflow:**
-        - Sender: aws-reports@moreretail.in
-        - Search: in:spam
-        - Drive Folder: Configured automatically
-        
-        **PDF Workflow:**
-        - LlamaParse Agent: More retail Agent
-        - Drive Folder: Configured for PDF processing
-        - Output: Google Sheets (mraws)
-        
-        ### Notes:
-        - All configurations are pre-set except Days Back and Max Results
-        - Combined workflow runs Gmail first, then PDF processing
-        - Logs update in real-time during workflow execution
-        - Files are organized automatically in Google Drive folders
-        """)
-    
-    with st.sidebar.expander("About", expanded=False):
-        st.markdown("""
-        **Combined Automation Workflows v1.0**
-        
-        This application combines:
-        - Gmail attachment downloading
-        - PDF processing with LlamaParse
-        - Google Drive organization
-        - Google Sheets data consolidation
-        
-        Built with Streamlit and Google APIs.
-        """)
-
-
-def main():
-    """Main function to run the Streamlit app"""
-    try:
-        # Initialize session state
-        if 'authenticated' not in st.session_state:
-            st.session_state.authenticated = False
-        
-        if 'workflow_running' not in st.session_state:
-            st.session_state.workflow_running = False
-        
-        if 'auto_refresh_logs' not in st.session_state:
-            st.session_state.auto_refresh_logs = False
-        
-        # Create UI
-        create_streamlit_ui()
-        create_help_section()
-        
-    except Exception as e:
-        st.error(f"Application error: {str(e)}")
-        st.info("Please refresh the page and try again.")
-
-
+# Run the application
 if __name__ == "__main__":
     main()
