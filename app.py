@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 Combined Streamlit App for Gmail to Drive and PDF to Excel Workflows
@@ -57,7 +56,7 @@ CONFIG = {
         'llama_agent': 'More retail Agent',
         'drive_folder_id': '1XHIFX-Gsb_Mx_AYjoi2NG1vMlvNE5CmQ',
         'spreadsheet_id': '16y9DAK2tVHgnZNnPeRoSSPPE2NcspW_qqMF8ZR8OOC0',
-        'sheet_range': 'mraws'
+        'sheet_range': 'mraws!A:AAA'
     }
 }
 
@@ -359,6 +358,48 @@ class CombinedAutomation:
             self.log(f"Failed to get existing file IDs: {str(e)}", "ERROR")
             return set()
     
+    def _get_sheet_headers(self, spreadsheet_id: str, sheet_range: str) -> List[str]:
+        """Get existing headers from Google Sheet"""
+        try:
+            sheet_name = sheet_range.split('!')[0]
+            header_range = f"{sheet_name}!A1:AAA1"  # Wide range to cover many columns
+            result = self.sheets_service.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=header_range,
+                majorDimension="ROWS"
+            ).execute()
+            
+            values = result.get('values', [])
+            headers = values[0] if values else []
+            self.log(f"Fetched {len(headers)} existing headers from sheet", "INFO")
+            return headers
+            
+        except Exception as e:
+            self.log(f"Failed to get sheet headers: {str(e)}", "ERROR")
+            return []
+    
+    def _update_sheet_headers(self, spreadsheet_id: str, sheet_range: str, new_headers: List[str]):
+        """Update the header row in Google Sheet"""
+        try:
+            sheet_name = sheet_range.split('!')[0]
+            end_col = chr(64 + len(new_headers))
+            header_range = f"{sheet_name}!A1:{end_col}1"
+            body = {
+                'values': [new_headers]
+            }
+            self.sheets_service.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range=header_range,
+                valueInputOption='USER_ENTERED',
+                body=body
+            ).execute()
+            self.log(f"Updated sheet headers to {len(new_headers)} columns", "SUCCESS")
+            return True
+            
+        except Exception as e:
+            self.log(f"Failed to update sheet headers: {str(e)}", "ERROR")
+            return False
+    
     def process_pdf_workflow(self, config: dict, progress_callback=None, status_callback=None, skip_existing: bool = False):
         """Process PDF to Excel workflow using LlamaParse"""
         try:
@@ -381,6 +422,9 @@ class CombinedAutomation:
                 return {'success': False, 'processed': 0}
             
             self.log("LlamaParse agent found successfully", "SUCCESS")
+            
+            # Get existing headers always
+            existing_headers = self._get_sheet_headers(config['spreadsheet_id'], config['sheet_range'])
             
             # Get existing IDs if skipping
             existing_ids = set()
@@ -417,7 +461,6 @@ class CombinedAutomation:
             
             processed_count = 0
             total_rows = 0
-            existing_headers = None
             
             for i, file in enumerate(pdf_files):
                 try:
@@ -457,29 +500,35 @@ class CombinedAutomation:
                             # Prepare data for Google Sheets
                             self.log(f"Preparing {len(rows)} rows for Google Sheets from {file['name']}", "INFO")
                             
-                            # Get all unique keys to create comprehensive headers
+                            # Get all unique keys
                             all_keys = set()
                             for row in rows:
                                 all_keys.update(row.keys())
                             
-                            # Use existing headers if available, otherwise create new ones
-                            if existing_headers:
-                                headers = existing_headers
-                                # Add any missing headers
-                                for key in all_keys:
-                                    if key not in headers:
-                                        headers.append(key)
-                            else:
-                                headers = list(all_keys)
-                                existing_headers = headers
+                            # Compute new headers
+                            headers = existing_headers[:]
+                            new_columns = [k for k in sorted(all_keys) if k not in headers]
+                            if new_columns:
+                                headers += new_columns
+                                success = self._update_sheet_headers(
+                                    config['spreadsheet_id'],
+                                    config['sheet_range'],
+                                    headers
+                                )
+                                if success:
+                                    existing_headers = headers
+                                else:
+                                    continue  # Skip if can't update headers
                             
-                            # Convert to list of lists for Sheets API
+                            # Prepare values - only rows, no headers
                             values = []
-                            if processed_count == 0:  # First file - include headers
+                            if not existing_headers:
+                                # First ever append
+                                existing_headers = headers
                                 values.append(headers)
                             
                             for row in rows:
-                                row_values = [row.get(h, "") for h in headers]
+                                row_values = [row.get(h, "") for h in existing_headers]
                                 values.append(row_values)
                             
                             # Append to Google Sheet
@@ -972,6 +1021,7 @@ def main():
                     help="Maximum number of PDFs to process",
                     key="pdf_max_files"
                 )
+                pdf_skip_existing = st.checkbox("Skip already processed files", value=True, key="pdf_skip_existing")
             
             with col2:
                 st.subheader("Description")
@@ -1014,7 +1064,8 @@ def main():
                             result = automation.process_pdf_workflow(
                                 config, 
                                 progress_callback=update_progress,
-                                status_callback=update_status
+                                status_callback=update_status,
+                                skip_existing=pdf_skip_existing
                             )
                             
                             if result['success']:
@@ -1124,20 +1175,19 @@ def main():
                             # Run Gmail workflow
                             update_status("Running Gmail to Drive...")
                             gmail_result = automation.process_gmail_workflow(
-                                config=gmail_config, 
+                                gmail_config, 
                                 progress_callback=update_progress,
                                 status_callback=update_status
                             )
                             
                             if not gmail_result['success']:
                                 st.error("❌ Gmail workflow failed. Stopping combined workflow.")
-                                st.session_state.workflow_running = False
                                 return
                             
                             # Run PDF workflow with skip_existing
                             update_status("Checking existing files and running PDF to Excel...")
                             pdf_result = automation.process_pdf_workflow(
-                                config=pdf_config, 
+                                pdf_config, 
                                 progress_callback=update_progress,
                                 status_callback=update_status,
                                 skip_existing=True
