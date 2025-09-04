@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """
 Combined Streamlit App for Gmail to Drive and PDF to Excel Workflows
@@ -862,9 +863,9 @@ def main():
             
             with col1:
                 st.subheader("Configuration")
-                st.text_input("Sender Email", value=CONFIG['gmail']['sender'], disabled=True)
-                st.text_input("Search Keywords", value=CONFIG['gmail']['search_term'], disabled=True)
-                st.text_input("Google Drive Folder ID", value=CONFIG['gmail']['gdrive_folder_id'], disabled=True)
+                st.text_input("Sender Email", value=CONFIG['gmail']['sender'], disabled=True, key="gmail_sender")
+                st.text_input("Search Keywords", value=CONFIG['gmail']['search_term'], disabled=True, key="gmail_search_term")
+                st.text_input("Google Drive Folder ID", value=CONFIG['gmail']['gdrive_folder_id'], disabled=True, key="gmail_drive_folder")
                 
                 st.subheader("Search Parameters")
                 gmail_days_back = st.number_input(
@@ -872,14 +873,16 @@ def main():
                     min_value=1, 
                     max_value=365, 
                     value=7,
-                    help="How many days back to search"
+                    help="How many days back to search",
+                    key="gmail_days_back"
                 )
                 gmail_max_results = st.number_input(
                     "Maximum emails to process", 
                     min_value=1, 
                     max_value=500, 
                     value=50,
-                    help="Maximum number of emails to process"
+                    help="Maximum number of emails to process",
+                    key="gmail_max_results"
                 )
             
             with col2:
@@ -891,7 +894,7 @@ def main():
                        "4. Avoids duplicates automatically")
             
             # Gmail workflow execution
-            if st.button("🚀 Start Gmail Workflow", type="primary", disabled=st.session_state.workflow_running):
+            if st.button("🚀 Start Gmail Workflow", type="primary", disabled=st.session_state.workflow_running, key="start_gmail_workflow"):
                 if st.session_state.workflow_running:
                     st.warning("Another workflow is currently running. Please wait for it to complete.")
                 else:
@@ -946,11 +949,11 @@ def main():
             
             with col1:
                 st.subheader("Configuration")
-                st.text_input("LlamaParse API Key", value="***HIDDEN***", disabled=True)
-                st.text_input("LlamaParse Agent Name", value=CONFIG['pdf']['llama_agent'], disabled=True)
-                st.text_input("PDF Source Folder ID", value=CONFIG['pdf']['drive_folder_id'], disabled=True)
-                st.text_input("Google Sheets Spreadsheet ID", value=CONFIG['pdf']['spreadsheet_id'], disabled=True)
-                st.text_input("Sheet Range", value=CONFIG['pdf']['sheet_range'], disabled=True)
+                st.text_input("LlamaParse API Key", value="***HIDDEN***", disabled=True, key="pdf_api_key")
+                st.text_input("LlamaParse Agent Name", value=CONFIG['pdf']['llama_agent'], disabled=True, key="pdf_agent_name")
+                st.text_input("PDF Source Folder ID", value=CONFIG['pdf']['drive_folder_id'], disabled=True, key="pdf_drive_folder")
+                st.text_input("Google Sheets Spreadsheet ID", value=CONFIG['pdf']['spreadsheet_id'], disabled=True, key="pdf_spreadsheet_id")
+                st.text_input("Sheet Range", value=CONFIG['pdf']['sheet_range'], disabled=True, key="pdf_sheet_range")
                 
                 st.subheader("Processing Parameters")
                 pdf_days_back = st.number_input(
@@ -958,14 +961,16 @@ def main():
                     min_value=1, 
                     max_value=365, 
                     value=7,
-                    help="Only process PDFs created in the last N days"
+                    help="Only process PDFs created in the last N days",
+                    key="pdf_days_back"
                 )
                 pdf_max_files = st.number_input(
                     "Maximum PDFs to process", 
                     min_value=1, 
                     max_value=500, 
                     value=50,
-                    help="Maximum number of PDFs to process"
+                    help="Maximum number of PDFs to process",
+                    key="pdf_max_files"
                 )
             
             with col2:
@@ -977,7 +982,7 @@ def main():
                        "4. Appends results to Google Sheets")
             
             # PDF workflow execution
-            if st.button("🚀 Start PDF Workflow", type="primary", disabled=st.session_state.workflow_running):
+            if st.button("🚀 Start PDF Workflow", type="primary", disabled=st.session_state.workflow_running, key="start_pdf_workflow"):
                 if st.session_state.workflow_running:
                     st.warning("Another workflow is currently running. Please wait for it to complete.")
                 else:
@@ -1035,14 +1040,14 @@ def main():
             
             with col1:
                 st.subheader("Configuration")
-                st.text_input("Gmail Sender", value=CONFIG['gmail']['sender'], disabled=True)
-                st.text_input("Gmail Search Keywords", value=CONFIG['gmail']['search_term'], disabled=True)
-                st.text_input("Gmail Drive Folder ID", value=CONFIG['gmail']['gdrive_folder_id'], disabled=True)
-                st.text_input("PDF LlamaParse API Key", value="***HIDDEN***", disabled=True)
-                st.text_input("PDF LlamaParse Agent Name", value=CONFIG['pdf']['llama_agent'], disabled=True)
-                st.text_input("PDF Source Folder ID", value=CONFIG['pdf']['drive_folder_id'], disabled=True)
-                st.text_input("Google Sheets Spreadsheet ID", value=CONFIG['pdf']['spreadsheet_id'], disabled=True)
-                st.text_input("Sheet Range", value=CONFIG['pdf']['sheet_range'], disabled=True)
+                st.text_input("Gmail Sender", value=CONFIG['gmail']['sender'], disabled=True, key="combined_gmail_sender")
+                st.text_input("Gmail Search Keywords", value=CONFIG['gmail']['search_term'], disabled=True, key="combined_gmail_search_term")
+                st.text_input("Gmail Drive Folder ID", value=CONFIG['gmail']['gdrive_folder_id'], disabled=True, key="combined_gmail_drive_folder")
+                st.text_input("PDF LlamaParse API Key", value="***HIDDEN***", disabled=True, key="combined_pdf_api_key")
+                st.text_input("PDF LlamaParse Agent Name", value=CONFIG['pdf']['llama_agent'], disabled=True, key="combined_pdf_agent_name")
+                st.text_input("PDF Source Folder ID", value=CONFIG['pdf']['drive_folder_id'], disabled=True, key="combined_pdf_drive_folder")
+                st.text_input("Google Sheets Spreadsheet ID", value=CONFIG['pdf']['spreadsheet_id'], disabled=True, key="combined_pdf_spreadsheet_id")
+                st.text_input("Sheet Range", value=CONFIG['pdf']['sheet_range'], disabled=True, key="combined_pdf_sheet_range")
                 
                 st.subheader("Parameters")
                 combined_days_back = st.number_input(
@@ -1050,21 +1055,24 @@ def main():
                     min_value=1, 
                     max_value=365, 
                     value=7,
-                    help="Days back for Gmail search and PDF processing"
+                    help="Days back for Gmail search and PDF processing",
+                    key="combined_days_back"
                 )
                 combined_max_emails = st.number_input(
                     "Max emails for Gmail", 
                     min_value=1, 
                     max_value=500, 
                     value=50,
-                    help="Maximum emails to process in Gmail workflow"
+                    help="Maximum emails to process in Gmail workflow",
+                    key="combined_max_emails"
                 )
                 combined_max_files = st.number_input(
                     "Max PDFs for processing", 
                     min_value=1, 
                     max_value=500, 
                     value=50,
-                    help="Maximum PDFs to process in PDF workflow"
+                    help="Maximum PDFs to process in PDF workflow",
+                    key="combined_max_files"
                 )
             
             with col2:
@@ -1076,7 +1084,7 @@ def main():
                        "4. Show combined summary")
             
             # Combined workflow execution
-            if st.button("🚀 Start Combined Workflow", type="primary", disabled=st.session_state.workflow_running):
+            if st.button("🚀 Start Combined Workflow", type="primary", disabled=st.session_state.workflow_running, key="start_combined_workflow"):
                 if st.session_state.workflow_running:
                     st.warning("Another workflow is currently running. Please wait for it to complete.")
                 else:
@@ -1116,19 +1124,20 @@ def main():
                             # Run Gmail workflow
                             update_status("Running Gmail to Drive...")
                             gmail_result = automation.process_gmail_workflow(
-                                gmail_config, 
+                                config=gmail_config, 
                                 progress_callback=update_progress,
                                 status_callback=update_status
                             )
                             
                             if not gmail_result['success']:
                                 st.error("❌ Gmail workflow failed. Stopping combined workflow.")
+                                st.session_state.workflow_running = False
                                 return
                             
                             # Run PDF workflow with skip_existing
                             update_status("Checking existing files and running PDF to Excel...")
                             pdf_result = automation.process_pdf_workflow(
-                                pdf_config, 
+                                config=pdf_config, 
                                 progress_callback=update_progress,
                                 status_callback=update_status,
                                 skip_existing=True
@@ -1151,15 +1160,15 @@ def main():
         
         col1, col2, col3 = st.columns(3)
         with col1:
-            if st.button("🔄 Refresh Logs"):
+            if st.button("🔄 Refresh Logs", key="refresh_logs"):
                 st.rerun()
         with col2:
-            if st.button("🗑️ Clear Logs"):
+            if st.button("🗑️ Clear Logs", key="clear_logs"):
                 automation.clear_logs()
                 st.success("Logs cleared!")
                 st.rerun()
         with col3:
-            if st.checkbox("Auto-refresh (5s)", value=False):
+            if st.checkbox("Auto-refresh (5s)", value=False, key="auto_refresh_logs"):
                 time.sleep(5)
                 st.rerun()
         
