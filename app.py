@@ -48,7 +48,7 @@ st.set_page_config(
 CONFIG = {
     'gmail': {
         'sender': 'aws-reports@moreretail.in',
-        'search_term': 'in:spam ',
+        'search_term': 'GRN',
         'gdrive_folder_id': '1gZoNjdGarwMD5-Ci3uoqjNZZ8bTNyVoy'
     },
     'pdf': {
