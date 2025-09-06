@@ -54,7 +54,7 @@ CONFIG = {
     'pdf': {
         'llama_api_key': 'llx-DkwQuIwq5RVZk247W0r5WCdywejPI5CybuTDJgAUUcZKNq0A',
         'llama_agent': 'More retail Agent',
-        'drive_folder_id': '1XHIFX-Gsb_Mx_AYjoi2NG1vMlvNE5CmQ',
+        'drive_folder_id': '1LkJFeHSKc1_o3TY5-uo_gSUdcUofg1pt',
         'spreadsheet_id': '16y9DAK2tVHgnZNnPeRoSSPPE2NcspW_qqMF8ZR8OOC0',
         'sheet_range': 'mraws!A:AAA'
     }
