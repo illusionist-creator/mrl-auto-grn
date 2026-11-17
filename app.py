@@ -44,6 +44,15 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+def _secret(name: str) -> str:
+    """Read a key from Streamlit secrets (Streamlit Cloud: app settings -> Secrets) or the environment."""
+    try:
+        if name in st.secrets:
+            return st.secrets[name]
+    except Exception:
+        pass
+    return os.environ.get(name, "")
+
 # Hardcoded configuration
 CONFIG = {
     'gmail': {
@@ -52,7 +61,7 @@ CONFIG = {
         'gdrive_folder_id': '1gZoNjdGarwMD5-Ci3uoqjNZZ8bTNyVoy'
     },
     'pdf': {
-        'llama_api_key': 'llx-DkwQuIwq5RVZk247W0r5WCdywejPI5CybuTDJgAUUcZKNq0A',
+        'llama_api_key': _secret('LLAMA_CLOUD_API_KEY'),
         'llama_agent': 'More retail Agent',
         'drive_folder_id': '1LkJFeHSKc1_o3TY5-uo_gSUdcUofg1pt',
         'spreadsheet_id': '16y9DAK2tVHgnZNnPeRoSSPPE2NcspW_qqMF8ZR8OOC0',
